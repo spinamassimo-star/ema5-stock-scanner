@@ -1,102 +1,141 @@
+
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-# Elenco dei componenti S&P 500
+URL = (
+    "https://raw.githubusercontent.com/datasets/"
+    "s-and-p-500-companies/main/data/constituents.csv"
+)
 
-URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+COLUMNS = [
+    "Ticker", "Segnale", "Data",
+    "Chiusura", "EMA5", "Distanza %"
+]
+
 
 def get_symbols():
     df = pd.read_csv(URL)
-    symbols = df["Symbol"].dropna().tolist()
-    return [s.replace(".", "-") for s in symbols]
+    return sorted(
+        df["Symbol"]
+        .dropna()
+        .astype(str)
+        .str.replace(".", "-", regex=False)
+        .unique()
+        .tolist()
+    )
 
 
 def scan_symbol(symbol):
     try:
         data = yf.download(
             symbol,
-            period="3mo",
+            period="1y",
             interval="1d",
             auto_adjust=True,
             progress=False,
             threads=False
         )
 
-        if data.empty or len(data) < 10:
+        if data.empty:
             return None
 
         close = data["Close"]
+
         if isinstance(close, pd.DataFrame):
             close = close.iloc[:, 0]
 
-        close = close.dropna()
+        close = close.dropna().sort_index()
 
-        # Escludiamo l'eventuale candela giornaliera
-        # ancora in formazione.
+        # Usa soltanto candele giornaliere completate.
         now_ny = datetime.now(ZoneInfo("America/New_York"))
-        last_date = pd.Timestamp(close.index[-1]).date()
+        today_ny = now_ny.date()
 
-        if last_date == now_ny.date() and now_ny.hour < 16:
-            close = close.iloc[:-1]
+        dates = pd.to_datetime(close.index).date
 
-        if len(close) < 10:
+        # Margine di 30 minuti dopo la chiusura ordinaria.
+        if now_ny.time() < time(16, 30):
+            close = close[
+                [d < today_ny for d in dates]
+            ]
+
+        if len(close) < 100:
             return None
 
-        ema = close.ewm(span=5, adjust=False).mean()
+        ema = close.ewm(
+            span=5,
+            adjust=False
+        ).mean()
 
-        prev_close = float(close.iloc[-2])
-        last_close = float(close.iloc[-1])
-        prev_ema = float(ema.iloc[-2])
-        last_ema = float(ema.iloc[-1])
+        c_prev = float(close.iloc[-2])
+        c_last = float(close.iloc[-1])
+
+        e_prev = float(ema.iloc[-2])
+        e_last = float(ema.iloc[-1])
 
         signal = None
 
-        if prev_close <= prev_ema and last_close > last_ema:
+        if c_prev <= e_prev and c_last > e_last:
             signal = "CROSS UP"
 
-        elif prev_close >= prev_ema and last_close < last_ema:
+        elif c_prev >= e_prev and c_last < e_last:
             signal = "CROSS DOWN"
 
         if signal is None:
             return None
 
+        last_date = pd.Timestamp(close.index[-1]).date()
+
         return {
             "Ticker": symbol,
             "Segnale": signal,
-            "Data": str(close.index[-1].date()),
-            "Chiusura": round(last_close, 2),
-            "EMA5": round(last_ema, 2),
+            "Data": str(last_date),
+            "Chiusura": round(c_last, 2),
+            "EMA5": round(e_last, 2),
             "Distanza %": round(
-                (last_close / last_ema - 1) * 100, 2
+                (c_last / e_last - 1) * 100, 2
             )
         }
 
-    except Exception as e:
-        print(f"Errore {symbol}: {e}")
+    except Exception as exc:
+        print(f"ERRORE {symbol}: {exc}")
         return None
+
 
 def main():
     symbols = get_symbols()
     results = []
 
+    print(f"Titoli da analizzare: {len(symbols)}")
+
     for i, symbol in enumerate(symbols, 1):
         print(f"{i}/{len(symbols)} - {symbol}")
+
         result = scan_symbol(symbol)
 
-        if result:
+        if result is not None:
             results.append(result)
 
-    columns = [
-        "Ticker", "Segnale", "Data",
-        "Chiusura", "EMA5", "Distanza %"
-    ]
+    df = pd.DataFrame(results, columns=COLUMNS)
 
-    df = pd.DataFrame(results, columns=columns)
+    # Mostra solo i segnali relativi alla seduta
+    # piu' recente presente nei risultati.
+    if not df.empty:
+        latest_date = df["Data"].max()
+        df = df[df["Data"] == latest_date].copy()
+
+        df = df.sort_values(
+            by="Distanza %",
+            ascending=False
+        )
+
     df.to_csv("signals.csv", index=False)
 
-    print(f"Scansione completata: {len(df)} segnali.")
+    print(f"Segnali trovati: {len(df)}")
+    print("File signals.csv aggiornato.")
+
 
 if __name__ == "__main__":
     main()
+
