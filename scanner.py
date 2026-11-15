@@ -7,10 +7,12 @@ URL = (
     "https://raw.githubusercontent.com/datasets/"
     "s-and-p-500-companies/main/data/constituents.csv"
 )
-
+MIN_EMA_SLOPE_PCT = 0.10
 COLUMNS = [
     "Ticker", "Segnale", "Data",
     "Chiusura", "EMA5", "Distanza %"
+    "Pendenza EMA %"
+]
 ]
 
 
@@ -73,16 +75,30 @@ def scan_symbol(symbol):
         e_prev = float(ema.iloc[-2])
         e_last = float(ema.iloc[-1])
 
-        signal = None
+        
+# Pendenza percentuale EMA5 fra le ultime
+# due candele giornaliere completate.
+ema_slope_pct = (e_last / e_prev - 1) * 100
 
-        if c_prev <= e_prev and c_last > e_last:
-            signal = "CROSS UP"
+signal = None
 
-        elif c_prev >= e_prev and c_last < e_last:
-            signal = "CROSS DOWN"
+if (
+    c_prev <= e_prev
+    and c_last > e_last
+    and ema_slope_pct >= MIN_EMA_SLOPE_PCT
+):
+    signal = "CROSS UP"
 
-        if signal is None:
-            return None
+elif (
+    c_prev >= e_prev
+    and c_last < e_last
+    and ema_slope_pct <= -MIN_EMA_SLOPE_PCT
+):
+    signal = "CROSS DOWN"
+
+if signal is None:
+    return None
+
 
         last_date = pd.Timestamp(close.index[-1]).date()
 
@@ -92,8 +108,14 @@ def scan_symbol(symbol):
             "Data": str(last_date),
             "Chiusura": round(c_last, 2),
             "EMA5": round(e_last, 2),
-            "Distanza %": round(
-                (c_last / e_last - 1) * 100, 2
+           
+"Distanza %": round(
+    (c_last / e_last - 1) * 100, 2
+),
+"Pendenza EMA %": round(
+    ema_slope_pct, 3
+)
+
             )
         }
 
