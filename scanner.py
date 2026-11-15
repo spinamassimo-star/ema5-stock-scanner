@@ -100,24 +100,23 @@ if signal is None:
 
         last_date = pd.Timestamp(close.index[-1]).date()
 
+
         return {
             "Ticker": symbol,
             "Segnale": signal,
             "Data": str(last_date),
             "Chiusura": round(c_last, 2),
             "EMA5": round(e_last, 2),
-           
-"Distanza %": round(
-    (c_last / e_last - 1) * 100, 2
-),
-"Pendenza EMA %": round(
-    ema_slope_pct, 3
-)
-
+            "Distanza %": round(
+                (c_last / e_last - 1) * 100, 2
+            ),
+            "Pendenza EMA %": round(
+                ema_slope_pct, 3
             )
         }
 
-    except Exception as exc:
+
+       except Exception as exc:
         print(f"ERRORE {symbol}: {exc}")
         return None
 
