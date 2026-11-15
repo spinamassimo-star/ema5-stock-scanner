@@ -13,8 +13,6 @@ COLUMNS = [
     "Chiusura", "EMA5", "Distanza %"
     "Pendenza EMA %"
 ]
-]
-
 
 def get_symbols():
     df = pd.read_csv(URL)
