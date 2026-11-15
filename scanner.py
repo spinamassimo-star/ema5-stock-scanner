@@ -1,159 +1,102 @@
-import pandas as pd
-import yfinance as yf
+import json
 from datetime import datetime, time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-URL = (
-    "https://raw.githubusercontent.com/datasets/"
-    "s-and-p-500-companies/main/data/constituents.csv"
-)
+import pandas as pd
+import yfinance as yf
+
+URL = 'https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv'
 MIN_EMA_SLOPE_PCT = 0.10
-COLUMNS = [
-    "Ticker", "Segnale", "Data",
-    "Chiusura", "EMA5", "Distanza %"
-    "Pendenza EMA %"
-]
+COLUMNS = ['Ticker', 'Segnale', 'Data', 'Chiusura', 'EMA5', 'Distanza %', 'Pendenza EMA %']
+
 
 def get_symbols():
-    df = pd.read_csv(URL)
-    return sorted(
-        df["Symbol"]
-        .dropna()
-        .astype(str)
-        .str.replace(".", "-", regex=False)
-        .unique()
-        .tolist()
-    )
+    table = pd.read_csv(URL)
+    if 'Symbol' not in table.columns:
+        raise RuntimeError('Elenco S&P 500 senza colonna Symbol')
+    symbols = table['Symbol'].dropna().astype(str).str.replace('.', '-', regex=False)
+    return sorted(set(symbols))
 
 
-def scan_symbol(symbol):
-    try:
-        data = yf.download(
-            symbol,
-            period="1y",
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False
-        )
-
-        if data.empty:
-            return None
-
-        close = data["Close"]
-
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-
-        close = close.dropna().sort_index()
-
-        # Usa soltanto candele giornaliere completate.
-        now_ny = datetime.now(ZoneInfo("America/New_York"))
-        today_ny = now_ny.date()
-
-        dates = pd.to_datetime(close.index).date
-
-        # Margine di 30 minuti dopo la chiusura ordinaria.
-        if now_ny.time() < time(16, 30):
-            close = close[
-                [d < today_ny for d in dates]
-            ]
-
-        if len(close) < 100:
-            return None
-
-        ema = close.ewm(
-            span=5,
-            adjust=False
-        ).mean()
-
-        c_prev = float(close.iloc[-2])
-        c_last = float(close.iloc[-1])
-
-        e_prev = float(ema.iloc[-2])
-        e_last = float(ema.iloc[-1])
-
-        
-# Pendenza percentuale EMA5 fra le ultime
-# due candele giornaliere completate.
-ema_slope_pct = (e_last / e_prev - 1) * 100
-
-signal = None
-
-if (
-    c_prev <= e_prev
-    and c_last > e_last
-    and ema_slope_pct >= MIN_EMA_SLOPE_PCT
-):
-    signal = "CROSS UP"
-
-elif (
-    c_prev >= e_prev
-    and c_last < e_last
-    and ema_slope_pct <= -MIN_EMA_SLOPE_PCT
-):
-    signal = "CROSS DOWN"
-
-if signal is None:
-    return None
-
-
-        last_date = pd.Timestamp(close.index[-1]).date()
-
-
-        return {
-            "Ticker": symbol,
-            "Segnale": signal,
-            "Data": str(last_date),
-            "Chiusura": round(c_last, 2),
-            "EMA5": round(e_last, 2),
-            "Distanza %": round(
-                (c_last / e_last - 1) * 100, 2
-            ),
-            "Pendenza EMA %": round(
-                ema_slope_pct, 3
-            )
-        }
-
-
-       except Exception as exc:
-        print(f"ERRORE {symbol}: {exc}")
+def scan_symbol(symbol, cutoff_date):
+    data = yf.download(symbol, period='1y', interval='1d', auto_adjust=True,
+                       progress=False, threads=False)
+    if data.empty:
+        raise ValueError('Download vuoto')
+    close = data['Close']
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+    close = close.dropna().sort_index()
+    close = close[pd.to_datetime(close.index).date <= cutoff_date]
+    if len(close) < 100:
+        raise ValueError('Storico insufficiente')
+    last_date = pd.Timestamp(close.index[-1]).date()
+    if last_date != cutoff_date:
+        raise ValueError(f'Ultima barra {last_date}, attesa {cutoff_date}')
+    ema = close.ewm(span=5, adjust=False).mean()
+    c_prev, c_last = float(close.iloc[-2]), float(close.iloc[-1])
+    e_prev, e_last = float(ema.iloc[-2]), float(ema.iloc[-1])
+    slope = (e_last / e_prev - 1) * 100
+    if c_prev <= e_prev and c_last > e_last and slope >= MIN_EMA_SLOPE_PCT:
+        signal = 'CROSS UP'
+    elif c_prev >= e_prev and c_last < e_last and slope <= -MIN_EMA_SLOPE_PCT:
+        signal = 'CROSS DOWN'
+    else:
         return None
+    return {
+        'Ticker': symbol,
+        'Segnale': signal,
+        'Data': str(last_date),
+        'Chiusura': round(c_last, 2),
+        'EMA5': round(e_last, 2),
+        'Distanza %': round((c_last / e_last - 1) * 100, 2),
+        'Pendenza EMA %': round(slope, 3),
+    }
 
 
 def main():
     symbols = get_symbols()
-    results = []
-
-    print(f"Titoli da analizzare: {len(symbols)}")
-
+    now_ny = datetime.now(ZoneInfo('America/New_York'))
+    # Use SPY as a market-calendar proxy; exclude today's unfinished session.
+    spy = yf.download('SPY', period='1mo', interval='1d', auto_adjust=True,
+                      progress=False, threads=False)
+    if spy.empty:
+        raise RuntimeError('Impossibile determinare ultima seduta da SPY')
+    dates = sorted(set(pd.to_datetime(spy.index).date))
+    eligible = [d for d in dates if d < now_ny.date() or
+                (d == now_ny.date() and now_ny.time() >= time(16, 30))]
+    if not eligible:
+        raise RuntimeError('Nessuna seduta completata individuata')
+    cutoff_date = eligible[-1]
+    results, failures, processed = [], [], 0
+    print(f'Seduta richiesta: {cutoff_date}; titoli: {len(symbols)}', flush=True)
     for i, symbol in enumerate(symbols, 1):
-        print(f"{i}/{len(symbols)} - {symbol}")
-
-        result = scan_symbol(symbol)
-
-        if result is not None:
-            results.append(result)
-
+        try:
+            row = scan_symbol(symbol, cutoff_date)
+            processed += 1
+            if row:
+                results.append(row)
+        except Exception as exc:
+            failures.append({'Ticker': symbol, 'Errore': str(exc)})
+        if i % 50 == 0:
+            print(f'Completati {i}/{len(symbols)}', flush=True)
+    # Avoid replacing good results if the data provider is substantially unavailable.
+    if processed < len(symbols) * 0.90:
+        raise RuntimeError(f'Scansione incompleta: {processed}/{len(symbols)}; '
+                           'signals.csv precedente conservato')
     df = pd.DataFrame(results, columns=COLUMNS)
-
-    # Mostra solo i segnali relativi alla seduta
-    # piu' recente presente nei risultati.
-    if not df.empty:
-        latest_date = df["Data"].max()
-        df = df[df["Data"] == latest_date].copy()
-
-        df = df.sort_values(
-            by="Distanza %",
-            ascending=False
-        )
-
-    df.to_csv("signals.csv", index=False)
-
-    print(f"Segnali trovati: {len(df)}")
-    print("File signals.csv aggiornato.")
+    df = df.sort_values('Distanza %', ascending=False)
+    df.to_csv('signals.csv', index=False)
+    pd.DataFrame(failures, columns=['Ticker', 'Errore']).to_csv('scan_errors.csv', index=False)
+    summary = {'seduta': str(cutoff_date), 'universo': len(symbols),
+               'analizzati': processed, 'errori': len(failures),
+               'cross_up': int((df['Segnale'] == 'CROSS UP').sum()),
+               'cross_down': int((df['Segnale'] == 'CROSS DOWN').sum()),
+               'aggiornato_utc': datetime.now(ZoneInfo('UTC')).isoformat()}
+    Path('scan_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+    print(summary, flush=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
