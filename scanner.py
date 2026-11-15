@@ -4,12 +4,14 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # Elenco dei componenti S&P 500
-URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
 
 def get_symbols():
-    tables = pd.read_html(URL)
-    symbols = tables[0]["Symbol"].tolist()
+    df = pd.read_csv(URL)
+    symbols = df["Symbol"].dropna().tolist()
     return [s.replace(".", "-") for s in symbols]
+
 
 def scan_symbol(symbol):
     try:
