@@ -94,4 +94,7 @@ if summary is None:
     st.info("Riepilogo non disponibile: controlla scan_summary.json nel repository.")
 elif isinstance(summary, dict):
     with st.expander("Dettagli completi della scansione (scan_summary.json)"):
+        st.json(summary)
+else:
+    st.warning("Il riepilogo JSON non è un oggetto: verifica lo schema di scan_summary.json.")
 
