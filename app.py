@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 from urllib.parse import quote
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -68,7 +70,8 @@ analyzed = get_summary_value(summary, [
     "scanned_symbols", "titoli_analizzati", "success_count", "successful"
 ])
 scan_time = get_summary_value(summary, [
-    "scan_time", "scanned_at", "timestamp", "updated_at", "scan_datetime",
+    "aggiornato_utc", "scan_time", "scanned_at",
+    "timestamp", "updated_at", "scan_datetime",
     "generated_at", "last_update", "ultima_scansione"
 ])
 errors_count = get_summary_value(summary, [
@@ -88,7 +91,23 @@ d.metric("Errori / dati mancanti", errors_count if errors_count is not None else
 
 latest_session = str(df["Data"].max()) if not df.empty else "Nessun segnale"
 st.write("**Ultima seduta nei risultati:**", latest_session)
-st.write("**Data e ora della scansione:**", str(scan_time) if scan_time is not None else "Non disponibile nel riepilogo")
+if scan_time:
+    try:
+        dt = datetime.fromisoformat(
+            str(scan_time).replace("Z", "+00:00")
+        )
+        dt_italia = dt.astimezone(
+            ZoneInfo("Europe/Rome")
+        )
+        data_formattata = dt_italia.strftime(
+            "%d/%m/%Y ore %H:%M"
+        )
+    except (ValueError, TypeError):
+        data_formattata = str(scan_time)
+else:
+    data_formattata = "Non disponibile"
+
+st.write("**Data e ora della scansione:**", data_formattata)
 
 if summary is None:
     st.info("Riepilogo non disponibile: controlla scan_summary.json nel repository.")
