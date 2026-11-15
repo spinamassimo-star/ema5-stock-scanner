@@ -1,112 +1,97 @@
-import streamlit as st
-import pandas as pd
+import json
 from pathlib import Path
 from urllib.parse import quote
 
-st.set_page_config(
-    page_title="Stock Scanner EMA 5",
-    page_icon="📈",
-    layout="wide"
-)
+import pandas as pd
+import streamlit as st
 
+st.set_page_config(page_title="Stock Scanner EMA 5", page_icon="📈", layout="wide")
 st.title("📈 STOCK SCANNER EMA 5")
-st.caption(
-    "S&P 500 | Daily | Nuovi CROSS confermati"
-)
+st.caption("S&P 500 | Daily | CROSS confermati | Pendenza EMA5 minima ±0,10%")
 
-file = Path("signals.csv")
+signals_path = Path("signals.csv")
+summary_path = Path("scan_summary.json")
+errors_path = Path("scan_errors.csv")
 
-if not file.exists():
-    st.warning("Scansione non ancora disponibile.")
+if not signals_path.exists():
+    st.error("Manca signals.csv. Controlla l'ultima esecuzione di GitHub Actions.")
     st.stop()
 
-df = pd.read_csv(file)
-
-if df.empty:
-    st.info("Nessun CROSS rilevato nell'ultima scansione.")
+try:
+    df = pd.read_csv(signals_path)
+except pd.errors.EmptyDataError:
+    st.error("signals.csv è vuoto e non contiene intestazioni.")
+    st.stop()
+except Exception as exc:
+    st.error(f"Impossibile leggere signals.csv: {exc}")
     st.stop()
 
-st.metric("Segnali rilevati", len(df))
+required = {"Ticker", "Segnale", "Data", "Chiusura", "EMA5", "Distanza %"}
+if not required.issubset(df.columns):
+    st.error("Colonne mancanti in signals.csv: " + ", ".join(sorted(required - set(df.columns))))
+    st.stop()
 
-st.write("**Ultima seduta nei risultati:**", df["Data"].max())
+for col in ["Chiusura", "EMA5", "Distanza %", "Pendenza EMA %"]:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-filtro = st.radio(
-    "Filtra i segnali",
-    ["Tutti", "CROSS UP", "CROSS DOWN"],
-    horizontal=True
-)
+summary = None
+if summary_path.exists():
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        st.warning(f"Impossibile leggere scan_summary.json: {exc}")
 
-ordinamento = st.selectbox(
-    "Ordina i risultati",
-    [
-        "Distanza maggiore (positiva)",
-        "Distanza minore (negativa)",
-        "Distanza assoluta maggiore",
-        "Ticker alfabetico"
-    ]
-)
+errors = None
+if errors_path.exists():
+    try:
+        errors = pd.read_csv(errors_path)
+    except pd.errors.EmptyDataError:
+        errors = pd.DataFrame()
+    except Exception as exc:
+        st.warning(f"Impossibile leggere scan_errors.csv: {exc}")
 
-if filtro != "Tutti":
-    df = df[df["Segnale"] == filtro].copy()
+up = int((df["Segnale"] == "CROSS UP").sum())
+down = int((df["Segnale"] == "CROSS DOWN").sum())
 
-if ordinamento == "Distanza maggiore (positiva)":
-    df = df.sort_values(
-        "Distanza %", ascending=False
-    )
+# Non inventiamo il numero di titoli analizzati: dipende dallo schema del riepilogo.
+def get_summary_value(obj, candidates):
+    if not isinstance(obj, dict):
+        return None
+    for key in candidates:
+        if key in obj and obj[key] is not None:
+            return obj[key]
+    return None
 
-elif ordinamento == "Distanza minore (negativa)":
-    df = df.sort_values(
-        "Distanza %", ascending=True
-    )
+analyzed = get_summary_value(summary, [
+    "analyzed", "analyzed_symbols", "symbols_analyzed", "scanned",
+    "scanned_symbols", "titoli_analizzati", "success_count", "successful"
+])
+scan_time = get_summary_value(summary, [
+    "scan_time", "scanned_at", "timestamp", "updated_at", "scan_datetime",
+    "generated_at", "last_update", "ultima_scansione"
+])
+errors_count = get_summary_value(summary, [
+    "errors", "error_count", "failed", "failed_symbols", "download_errors"
+])
+if isinstance(errors_count, (list, dict)):
+    errors_count = len(errors_count)
+if errors_count is None and errors is not None:
+    errors_count = len(errors)
 
-elif ordinamento == "Distanza assoluta maggiore":
-    df = df.assign(
-        abs_dist=df["Distanza %"].abs()
-    ).sort_values(
-        "abs_dist", ascending=False
-    ).drop(columns=["abs_dist"])
+st.subheader("Riepilogo della scansione")
+a, b, c, d = st.columns(4)
+a.metric("Titoli analizzati", analyzed if analyzed is not None else "N/D")
+b.metric("CROSS UP", up)
+c.metric("CROSS DOWN", down)
+d.metric("Errori / dati mancanti", errors_count if errors_count is not None else "N/D")
 
-else:
-    df = df.sort_values("Ticker")
+latest_session = str(df["Data"].max()) if not df.empty else "Nessun segnale"
+st.write("**Ultima seduta nei risultati:**", latest_session)
+st.write("**Data e ora della scansione:**", str(scan_time) if scan_time is not None else "Non disponibile nel riepilogo")
 
-def link_grafico(ticker):
-    symbol = quote(str(ticker), safe="")
-    return (
-        "https://www.tradingview.com/chart/"
-        f"?symbol={symbol}"
-    )
-
-df["Apri grafico"] = df["Ticker"].apply(
-    link_grafico
-)
-
-st.dataframe(
-    df,
-    column_config={
-        "Apri grafico": st.column_config.LinkColumn(
-            "Grafico TradingView",
-            display_text="📊 Apri"
-        ),
-        "Distanza %": st.column_config.NumberColumn(
-            "Distanza %",
-            format="%.2f%%"
-        )
-    },
-    hide_index=True,
-    use_container_width=True
-)
-
-st.download_button(
-    "📥 Scarica risultati CSV",
-    data=df.to_csv(index=False),
-    file_name="ema5_signals.csv",
-    mime="text/csv"
-)
-
-st.caption(
-    "Segnali tecnici a scopo informativo. "
-    "Verificare sempre data, prezzi e disponibilita' "
-    "del titolo su Scalable Capital."
-)
-
+if summary is None:
+    st.info("Riepilogo non disponibile: controlla scan_summary.json nel repository.")
+elif isinstance(summary, dict):
+    with st.expander("Dettagli completi della scansione (scan_summary.json)"):
 
