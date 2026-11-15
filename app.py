@@ -117,3 +117,105 @@ elif isinstance(summary, dict):
 else:
     st.warning("Il riepilogo JSON non è un oggetto: verifica lo schema di scan_summary.json.")
 
+# TABELLA SEGNALI EMA5 CON LINK TRADINGVIEW
+# ==========================================
+
+from urllib.parse import quote
+
+st.divider()
+
+st.subheader("Segnali EMA 5 Daily")
+
+st.metric("Totale segnali", len(df))
+
+filtro = st.radio(
+    "Filtra i segnali",
+    ["Tutti", "CROSS UP", "CROSS DOWN"],
+    horizontal=True,
+)
+
+ordinamento = st.selectbox(
+    "Ordina i risultati",
+    [
+        "Distanza maggiore (positiva)",
+        "Distanza minore (negativa)",
+        "Distanza assoluta maggiore",
+        "Pendenza EMA maggiore",
+        "Pendenza EMA minore",
+        "Ticker A-Z",
+    ],
+)
+
+tabella = df.copy()
+
+if filtro != "Tutti":
+    tabella = tabella[
+        tabella["Segnale"] == filtro
+    ]
+
+if ordinamento == "Distanza maggiore (positiva)":
+    tabella = tabella.sort_values(
+        "Distanza %", ascending=False
+    )
+
+elif ordinamento == "Distanza minore (negativa)":
+    tabella = tabella.sort_values(
+        "Distanza %", ascending=True
+    )
+
+elif ordinamento == "Distanza assoluta maggiore":
+    tabella = tabella.assign(
+        distanza_assoluta=tabella["Distanza %"].abs()
+    ).sort_values(
+        "distanza_assoluta", ascending=False
+    ).drop(columns=["distanza_assoluta"])
+
+elif ordinamento == "Pendenza EMA maggiore":
+    tabella = tabella.sort_values(
+        "Pendenza EMA %", ascending=False
+    )
+
+elif ordinamento == "Pendenza EMA minore":
+    tabella = tabella.sort_values(
+        "Pendenza EMA %", ascending=True
+    )
+
+elif ordinamento == "Ticker A-Z":
+    tabella = tabella.sort_values("Ticker")
+
+tabella = tabella.copy()
+
+tabella["Grafico TradingView"] = tabella["Ticker"].apply(
+    lambda ticker: (
+        "https://www.tradingview.com/chart/?symbol="
+        + quote("NASDAQ:" + str(ticker), safe=":")
+    )
+)
+
+st.dataframe(
+    tabella,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Grafico TradingView": st.column_config.LinkColumn(
+            "Grafico TradingView",
+            display_text="📊 Apri",
+        ),
+        "Distanza %": st.column_config.NumberColumn(
+            "Distanza %",
+            format="%.2f%%",
+        ),
+        "Pendenza EMA %": st.column_config.NumberColumn(
+            "Pendenza EMA %",
+            format="%.3f%%",
+        ),
+    },
+)
+
+st.download_button(
+    "📥 Scarica risultati CSV",
+    data=tabella.to_csv(index=False).encode("utf-8"),
+    file_name="segnali_ema5.csv",
+    mime="text/csv",
+)
+
