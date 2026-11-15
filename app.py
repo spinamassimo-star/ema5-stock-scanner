@@ -64,7 +64,7 @@ def get_summary_value(obj, candidates):
     return None
 
 analyzed = get_summary_value(summary, [
-    "analyzed", "analyzed_symbols", "symbols_analyzed", "scanned",
+    "analizzati", "analyzed_symbols", "symbols_analyzed", "scanned",
     "scanned_symbols", "titoli_analizzati", "success_count", "successful"
 ])
 scan_time = get_summary_value(summary, [
