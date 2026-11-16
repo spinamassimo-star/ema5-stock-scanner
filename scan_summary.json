@@ -1,11 +1,11 @@
 {
-  "seduta": "2026-11-13",
+  "seduta": "2026-11-16",
   "universo": 503,
   "analizzati": 502,
   "errori": 1,
-  "cross_up": 77,
-  "cross_down": 47,
-  "nuovi_segnali_storico": 124,
-  "totale_segnali_storico": 124,
-  "aggiornato_utc": "2026-11-15T13:10:17.967712+00:00"
+  "cross_up": 19,
+  "cross_down": 114,
+  "nuovi_segnali_storico": 133,
+  "totale_segnali_storico": 257,
+  "aggiornato_utc": "2026-11-16T23:56:13.409534+00:00"
 }
