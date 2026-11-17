@@ -28,12 +28,14 @@ except Exception as exc:
     st.error(f"Impossibile leggere signals.csv: {exc}")
     st.stop()
 
-required = {"Ticker", "Segnale", "Data", "Chiusura", "EMA5", "Distanza %"}
+required = {"Ticker", "Segnale", "Data", "Chiusura", "EMA5", "Distanza %", "Pendenza EMA %"}
 if not required.issubset(df.columns):
     st.error("Colonne mancanti in signals.csv: " + ", ".join(sorted(required - set(df.columns))))
     st.stop()
 
-for col in ["Chiusura", "EMA5", "Distanza %", "Pendenza EMA %"]:
+liquidity_cols = ["Volume medio 20G", "Controvalore medio 20G (M$)"]
+liquidity_available = all(col in df.columns for col in liquidity_cols)
+for col in ["Chiusura", "EMA5", "Distanza %", "Pendenza EMA %", *liquidity_cols]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -56,7 +58,6 @@ if errors_path.exists():
 up = int((df["Segnale"] == "CROSS UP").sum())
 down = int((df["Segnale"] == "CROSS DOWN").sum())
 
-# Non inventiamo il numero di titoli analizzati: dipende dallo schema del riepilogo.
 def get_summary_value(obj, candidates):
     if not isinstance(obj, dict):
         return None
@@ -70,12 +71,11 @@ analyzed = get_summary_value(summary, [
     "scanned_symbols", "titoli_analizzati", "success_count", "successful"
 ])
 scan_time = get_summary_value(summary, [
-    "aggiornato_utc", "scan_time", "scanned_at",
-    "timestamp", "updated_at", "scan_datetime",
-    "generated_at", "last_update", "ultima_scansione"
+    "aggiornato_utc", "scan_time", "scanned_at", "timestamp",
+    "updated_at", "scan_datetime", "generated_at", "last_update", "ultima_scansione"
 ])
 errors_count = get_summary_value(summary, [
-    "errors", "error_count", "failed", "failed_symbols", "download_errors"
+    "errori", "errors", "error_count", "failed", "failed_symbols", "download_errors"
 ])
 if isinstance(errors_count, (list, dict)):
     errors_count = len(errors_count)
@@ -93,20 +93,13 @@ latest_session = str(df["Data"].max()) if not df.empty else "Nessun segnale"
 st.write("**Ultima seduta nei risultati:**", latest_session)
 if scan_time:
     try:
-        dt = datetime.fromisoformat(
-            str(scan_time).replace("Z", "+00:00")
-        )
-        dt_italia = dt.astimezone(
-            ZoneInfo("Europe/Rome")
-        )
-        data_formattata = dt_italia.strftime(
-            "%d/%m/%Y ore %H:%M"
-        )
+        dt = datetime.fromisoformat(str(scan_time).replace("Z", "+00:00"))
+        dt_italia = dt.astimezone(ZoneInfo("Europe/Rome"))
+        data_formattata = dt_italia.strftime("%d/%m/%Y ore %H:%M")
     except (ValueError, TypeError):
         data_formattata = str(scan_time)
 else:
     data_formattata = "Non disponibile"
-
 st.write("**Data e ora della scansione:**", data_formattata)
 
 if summary is None:
@@ -117,101 +110,67 @@ elif isinstance(summary, dict):
 else:
     st.warning("Il riepilogo JSON non è un oggetto: verifica lo schema di scan_summary.json.")
 
-# TABELLA SEGNALI EMA5 CON LINK TRADINGVIEW
-# ==========================================
-
-from urllib.parse import quote
-
 st.divider()
-
 st.subheader("Segnali EMA 5 Daily")
-
 st.metric("Totale segnali", len(df))
 
-filtro = st.radio(
-    "Filtra i segnali",
-    ["Tutti", "CROSS UP", "CROSS DOWN"],
-    horizontal=True,
-)
+filtro = st.radio("Filtra i segnali", ["Tutti", "CROSS UP", "CROSS DOWN"], horizontal=True)
 
-ordinamento = st.selectbox(
-    "Ordina i risultati",
-    [
-        "Distanza maggiore (positiva)",
-        "Distanza minore (negativa)",
-        "Distanza assoluta maggiore",
-        "Pendenza EMA maggiore",
-        "Pendenza EMA minore",
-        "Ticker A-Z",
-    ],
-)
+sort_options = [
+    "Distanza maggiore (positiva)",
+    "Distanza minore (negativa)",
+    "Distanza assoluta maggiore",
+    "Pendenza EMA maggiore",
+    "Pendenza EMA minore",
+    "Ticker A-Z",
+]
+if liquidity_available:
+    sort_options.extend(["Volume medio 20G maggiore", "Controvalore medio 20G maggiore"])
+else:
+    st.info("Le colonne di liquidità compariranno dopo la prima scansione con il nuovo scanner.py.")
 
+ordinamento = st.selectbox("Ordina i risultati", sort_options)
 tabella = df.copy()
-
 if filtro != "Tutti":
-    tabella = tabella[
-        tabella["Segnale"] == filtro
-    ]
+    tabella = tabella[tabella["Segnale"] == filtro]
 
 if ordinamento == "Distanza maggiore (positiva)":
-    tabella = tabella.sort_values(
-        "Distanza %", ascending=False
-    )
-
+    tabella = tabella.sort_values("Distanza %", ascending=False, kind="stable")
 elif ordinamento == "Distanza minore (negativa)":
-    tabella = tabella.sort_values(
-        "Distanza %", ascending=True
-    )
-
+    tabella = tabella.sort_values("Distanza %", ascending=True, kind="stable")
 elif ordinamento == "Distanza assoluta maggiore":
-    tabella = tabella.assign(
-        distanza_assoluta=tabella["Distanza %"].abs()
-    ).sort_values(
-        "distanza_assoluta", ascending=False
+    tabella = tabella.assign(distanza_assoluta=tabella["Distanza %"].abs()).sort_values(
+        "distanza_assoluta", ascending=False, kind="stable"
     ).drop(columns=["distanza_assoluta"])
-
 elif ordinamento == "Pendenza EMA maggiore":
-    tabella = tabella.sort_values(
-        "Pendenza EMA %", ascending=False
-    )
-
+    tabella = tabella.sort_values("Pendenza EMA %", ascending=False, kind="stable")
 elif ordinamento == "Pendenza EMA minore":
-    tabella = tabella.sort_values(
-        "Pendenza EMA %", ascending=True
-    )
-
+    tabella = tabella.sort_values("Pendenza EMA %", ascending=True, kind="stable")
+elif ordinamento == "Volume medio 20G maggiore":
+    tabella = tabella.sort_values("Volume medio 20G", ascending=False, na_position="last", kind="stable")
+elif ordinamento == "Controvalore medio 20G maggiore":
+    tabella = tabella.sort_values("Controvalore medio 20G (M$)", ascending=False, na_position="last", kind="stable")
 elif ordinamento == "Ticker A-Z":
-    tabella = tabella.sort_values("Ticker")
+    tabella = tabella.sort_values("Ticker", kind="stable")
 
 tabella = tabella.copy()
-
 tabella["Grafico TradingView"] = tabella["Ticker"].apply(
-    lambda ticker: (
-        "https://www.tradingview.com/chart/?symbol="
-        + quote("NASDAQ:" + str(ticker), safe=":")
+    lambda ticker: "https://www.tradingview.com/chart/?symbol=" + quote("NASDAQ:" + str(ticker), safe=":")
+)
+
+column_config = {
+    "Grafico TradingView": st.column_config.LinkColumn("Grafico TradingView", display_text="📊 Apri"),
+    "Distanza %": st.column_config.NumberColumn("Distanza %", format="%.2f%%"),
+    "Pendenza EMA %": st.column_config.NumberColumn("Pendenza EMA %", format="%.3f%%"),
+}
+if "Volume medio 20G" in tabella.columns:
+    column_config["Volume medio 20G"] = st.column_config.NumberColumn("Volume medio 20G", format="%d")
+if "Controvalore medio 20G (M$)" in tabella.columns:
+    column_config["Controvalore medio 20G (M$)"] = st.column_config.NumberColumn(
+        "Controvalore medio 20G (M$)", format="%.2f"
     )
-)
 
-st.dataframe(
-    tabella,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Grafico TradingView": st.column_config.LinkColumn(
-            "Grafico TradingView",
-            display_text="📊 Apri",
-        ),
-        "Distanza %": st.column_config.NumberColumn(
-            "Distanza %",
-            format="%.2f%%",
-        ),
-        "Pendenza EMA %": st.column_config.NumberColumn(
-            "Pendenza EMA %",
-            format="%.3f%%",
-        ),
-    },
-)
-
+st.dataframe(tabella, use_container_width=True, hide_index=True, column_config=column_config)
 st.download_button(
     "📥 Scarica risultati CSV",
     data=tabella.to_csv(index=False).encode("utf-8"),
